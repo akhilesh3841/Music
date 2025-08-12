@@ -9,14 +9,14 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "https://musicfrontend-one.vercel.app/" || "http://localhost:5173",
+    origin: "https://musicfrontend-one.vercel.app" || "http://localhost:5173",
     methods: ["GET", "POST"],
   },
 });
 
 app.use(
   cors({
-    origin: "https://musicfrontend-one.vercel.app/" || "http://localhost:5173",
+    origin: "https://musicfrontend-one.vercel.app" || "http://localhost:5173",
   })
 );
 app.use(express.json());
