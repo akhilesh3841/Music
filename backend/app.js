@@ -3,6 +3,7 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
+const rateLimit = require("express-rate-limit");
 
 const app = express();
 const server = http.createServer(app);
@@ -11,16 +12,14 @@ const server = http.createServer(app);
 const allowedOrigins = [
   "https://music-theta-rouge.vercel.app", // Without trailing slash
   "https://music-theta-rouge.vercel.app/", // With trailing slash
-  "http://localhost:5173", // For local development
-  "http://localhost:5173/" // For local development with slash
+  "http://localhost:5173", // Local dev
+  "http://localhost:5173/" // Local dev with slash
 ];
 
 // CORS middleware
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
+    if (!origin) return callback(null, true); // allow no-origin requests
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
@@ -50,14 +49,13 @@ const io = new Server(server, {
     credentials: true
   },
   transports: ['websocket', 'polling'],
-  allowEIO3: true // For compatibility with older Socket.IO clients
+  allowEIO3: true
 });
 
 // Rate limiting
-const rateLimit = require("express-rate-limit");
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100
 });
 app.use(limiter);
 
@@ -68,7 +66,7 @@ app.get('/health', (req, res) => {
 
 const rooms = new Map();
 
-// Room management functions
+// Room management
 const createRoom = (roomId) => {
   rooms.set(roomId, {
     playlist: [],
@@ -88,53 +86,45 @@ const cleanupEmptyRooms = () => {
     }
   }
 };
+setInterval(cleanupEmptyRooms, 60 * 60 * 1000); // hourly cleanup
 
-// Set up periodic room cleanup
-setInterval(cleanupEmptyRooms, 60 * 60 * 1000); // Cleanup every hour
-
+// Socket.IO events
 io.on("connection", (socket) => {
   console.log(`New client connected: ${socket.id}`);
 
   socket.on("joinRoom", ({ roomId, username }, callback) => {
     try {
-      if (!roomId || !username) {
-        throw new Error("Room ID and username are required");
-      }
-
-      // Validate inputs
-      if (typeof roomId !== 'string' || typeof username !== 'string') {
-        throw new Error("Invalid input types");
-      }
+      if (!roomId || !username) throw new Error("Room ID and username are required");
+      if (typeof roomId !== 'string' || typeof username !== 'string') throw new Error("Invalid input types");
 
       socket.join(roomId);
-
-      if (!rooms.has(roomId)) {
-        createRoom(roomId);
-      }
+      if (!rooms.has(roomId)) createRoom(roomId);
 
       const room = rooms.get(roomId);
-
-      // Avoid duplicate users
       if (!room.users.some((u) => u.id === socket.id)) {
         room.users.push({ id: socket.id, username });
       }
 
-      callback({
-        success: true,
-        roomState: {
-          currentSong: room.currentSong,
-          playlist: room.playlist,
-          playbackStatus: room.playbackStatus,
-          currentTime: room.currentTime,
-          users: room.users.map((u) => u.username),
-        },
-      });
+      if (typeof callback === "function") {
+        callback({
+          success: true,
+          roomState: {
+            currentSong: room.currentSong,
+            playlist: room.playlist,
+            playbackStatus: room.playbackStatus,
+            currentTime: room.currentTime,
+            users: room.users.map((u) => u.username),
+          },
+        });
+      }
 
       socket.to(roomId).emit("userJoined", username);
       io.to(roomId).emit("usersUpdated", room.users.map((u) => u.username));
     } catch (error) {
       console.error("Join room error:", error);
-      callback({ success: false, error: error.message });
+      if (typeof callback === "function") {
+        callback({ success: false, error: error.message });
+      }
     }
   });
 
@@ -142,13 +132,8 @@ io.on("connection", (socket) => {
     try {
       const room = rooms.get(roomId);
       if (!room) throw new Error("Room not found");
+      if (!song?.id || !song?.name || !song?.downloadUrl) throw new Error("Invalid song format");
 
-      // Validate song structure
-      if (!song?.id || !song?.name || !song?.downloadUrl) {
-        throw new Error("Invalid song format");
-      }
-
-      // If song not already in playlist, add it
       if (!room.playlist.some((s) => s.id === song.id)) {
         room.playlist.push(song);
         io.to(roomId).emit("playlistUpdated", room.playlist);
@@ -165,10 +150,14 @@ io.on("connection", (socket) => {
         playbackStatus: "playing",
       });
 
-      callback({ success: true });
+      if (typeof callback === "function") {
+        callback({ success: true });
+      }
     } catch (error) {
       console.error("Play song error:", error);
-      callback({ success: false, error: error.message });
+      if (typeof callback === "function") {
+        callback({ success: false, error: error.message });
+      }
     }
   });
 
@@ -176,19 +165,12 @@ io.on("connection", (socket) => {
     try {
       const room = rooms.get(roomId);
       if (!room) return;
-
-      // Validate status
-      if (!["playing", "paused"].includes(status)) {
-        throw new Error("Invalid playback status");
-      }
+      if (!["playing", "paused"].includes(status)) throw new Error("Invalid playback status");
 
       room.playbackStatus = status;
       room.currentTime = currentTime;
 
-      socket.to(roomId).emit("playbackUpdate", {
-        status,
-        currentTime,
-      });
+      socket.to(roomId).emit("playbackUpdate", { status, currentTime });
     } catch (error) {
       console.error("Playback update error:", error);
     }
@@ -198,21 +180,21 @@ io.on("connection", (socket) => {
     try {
       const room = rooms.get(roomId);
       if (!room) throw new Error("Room not found");
-
-      // Validate song structure
-      if (!song?.id || !song?.name || !song?.downloadUrl) {
-        throw new Error("Invalid song format");
-      }
+      if (!song?.id || !song?.name || !song?.downloadUrl) throw new Error("Invalid song format");
 
       if (!room.playlist.some((s) => s.id === song.id)) {
         room.playlist.push(song);
         io.to(roomId).emit("playlistUpdated", room.playlist);
       }
 
-      callback({ success: true });
+      if (typeof callback === "function") {
+        callback({ success: true });
+      }
     } catch (error) {
       console.error("Add song error:", error);
-      callback({ success: false, error: error.message });
+      if (typeof callback === "function") {
+        callback({ success: false, error: error.message });
+      }
     }
   });
 
@@ -233,10 +215,14 @@ io.on("connection", (socket) => {
         playbackStatus: "playing",
       });
 
-      callback({ success: true });
+      if (typeof callback === "function") {
+        callback({ success: true });
+      }
     } catch (error) {
       console.error("Next song error:", error);
-      callback({ success: false, error: error.message });
+      if (typeof callback === "function") {
+        callback({ success: false, error: error.message });
+      }
     }
   });
 
@@ -246,8 +232,7 @@ io.on("connection", (socket) => {
       if (!room) throw new Error("Room not found");
       if (room.playlist.length === 0) throw new Error("Playlist is empty");
 
-      room.currentIndex =
-        (room.currentIndex - 1 + room.playlist.length) % room.playlist.length;
+      room.currentIndex = (room.currentIndex - 1 + room.playlist.length) % room.playlist.length;
       room.currentSong = room.playlist[room.currentIndex];
       room.playbackStatus = "playing";
       room.currentTime = 0;
@@ -258,10 +243,14 @@ io.on("connection", (socket) => {
         playbackStatus: "playing",
       });
 
-      callback({ success: true });
+      if (typeof callback === "function") {
+        callback({ success: true });
+      }
     } catch (error) {
       console.error("Previous song error:", error);
-      callback({ success: false, error: error.message });
+      if (typeof callback === "function") {
+        callback({ success: false, error: error.message });
+      }
     }
   });
 
@@ -272,13 +261,9 @@ io.on("connection", (socket) => {
       if (userIndex !== -1) {
         const username = room.users[userIndex].username;
         room.users.splice(userIndex, 1);
-
         if (room.users.length > 0) {
           io.to(roomId).emit("userLeft", username);
-          io.to(roomId).emit(
-            "usersUpdated",
-            room.users.map((u) => u.username)
-          );
+          io.to(roomId).emit("usersUpdated", room.users.map((u) => u.username));
         }
       }
     }
@@ -296,12 +281,10 @@ server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// Handle uncaught exceptions
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
 });
 
-// Handle unhandled promise rejections
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled Rejection:', err);
 });
