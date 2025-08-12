@@ -16,7 +16,7 @@ const Home = () => {
 
   useEffect(() => {
     // Initialize socket once on mount
-    socketRef.current = io('http://localhost:5000');
+    socketRef.current = io('https://music-vk1j.onrender.com/');
 
     socketRef.current.on('connect', () => {
       console.log('Connected to server:', socketRef.current.id);
