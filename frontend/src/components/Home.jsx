@@ -5,37 +5,49 @@ import Songs from './Songs';
 
 const Home = () => {
   const checkuser = useSelector(state => state.user.checkuser);
-
   const [username, setUsername] = useState('');
   const [roomId, setRoomId] = useState('');
   const [users, setUsers] = useState([]);
   const [error, setError] = useState('');
   const [joined, setJoined] = useState(false);
+  const [socketConnected, setSocketConnected] = useState(false);
 
   const socketRef = useRef(null);
 
   useEffect(() => {
-    // Initialize socket once on mount
-    socketRef.current = io('https://music-sji4.onrender.com/');
+    // Initialize socket with proper configuration
+    socketRef.current = io('https://music-sji4.onrender.com', {
+      withCredentials: true,
+      transports: ['websocket', 'polling'],
+      extraHeaders: {
+        "Origin": window.location.origin
+      }
+    });
 
     socketRef.current.on('connect', () => {
       console.log('Connected to server:', socketRef.current.id);
+      setSocketConnected(true);
     });
 
     socketRef.current.on('disconnect', () => {
       setError('Disconnected from server');
       setJoined(false);
+      setSocketConnected(false);
+    });
+
+    socketRef.current.on('connect_error', (err) => {
+      console.error('Connection error:', err);
+      setError('Failed to connect to server');
+      setSocketConnected(false);
     });
 
     socketRef.current.on('usersUpdated', (updatedUsers) => {
-      console.log('usersUpdated event received:', updatedUsers);
       setUsers(updatedUsers);
     });
 
     return () => {
       if (socketRef.current) {
         socketRef.current.disconnect();
-        console.log('Socket disconnected');
       }
     };
   }, []);
@@ -43,6 +55,11 @@ const Home = () => {
   const joinRoom = () => {
     if (!username || !roomId) {
       setError('Username and Room ID are required');
+      return;
+    }
+
+    if (!socketConnected) {
+      setError('Not connected to server');
       return;
     }
 
@@ -86,8 +103,9 @@ const Home = () => {
               setJoined(false);
               setUsername('');
               setRoomId('');
-              socketRef.current.disconnect();
-              socketRef.current = null;
+              if (socketRef.current) {
+                socketRef.current.disconnect();
+              }
             }}
           >
             Leave Room
@@ -108,30 +126,42 @@ const Home = () => {
         {error && (
           <p className="mb-4 text-center text-red-600 font-semibold bg-red-100 p-2 rounded">{error}</p>
         )}
-        <input
-          type="text"
-          placeholder="Enter your username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          className="w-full mb-4 px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
-        <input
-          type="text"
-          placeholder="Enter Room ID"
-          value={roomId}
-          onChange={(e) => setRoomId(e.target.value)}
-          className="w-full mb-6 px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
+        <div className="mb-4">
+          <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
+            Username
+          </label>
+          <input
+            id="username"
+            type="text"
+            placeholder="Enter your username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+        <div className="mb-6">
+          <label htmlFor="roomId" className="block text-sm font-medium text-gray-700 mb-1">
+            Room ID
+          </label>
+          <input
+            id="roomId"
+            type="text"
+            placeholder="Enter Room ID"
+            value={roomId}
+            onChange={(e) => setRoomId(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
         <button
           onClick={joinRoom}
-          disabled={!username || !roomId}
+          disabled={!username || !roomId || !socketConnected}
           className={`w-full py-3 font-semibold rounded transition ${
-            username && roomId
+            username && roomId && socketConnected
               ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
               : 'bg-indigo-300 text-indigo-100 cursor-not-allowed'
           }`}
         >
-          Join Room
+          {socketConnected ? 'Join Room' : 'Connecting...'}
         </button>
       </div>
     </div>

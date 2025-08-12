@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -6,21 +7,90 @@ const cors = require("cors");
 const app = express();
 const server = http.createServer(app);
 
-const io = new Server(server, {
-  cors: {
-    origin:"https://music-theta-rouge.vercel.app/",
-    methods: ["GET", "POST"],
+// Configure allowed origins
+const allowedOrigins = [
+  "https://music-theta-rouge.vercel.app", // Without trailing slash
+  "https://music-theta-rouge.vercel.app/", // With trailing slash
+  "http://localhost:5173", // For local development
+  "http://localhost:5173/" // For local development with slash
+];
+
+// CORS middleware
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
   },
+  methods: ["GET", "POST", "OPTIONS"],
+  credentials: true
+}));
+
+// Additional headers middleware
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || "*");
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  next();
 });
 
-app.use(
-  cors({
-    origin:"https://music-theta-rouge.vercel.app/",
-  })
-);
 app.use(express.json());
 
+// Socket.IO configuration
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST", "OPTIONS"],
+    credentials: true
+  },
+  transports: ['websocket', 'polling'],
+  allowEIO3: true // For compatibility with older Socket.IO clients
+});
+
+// Rate limiting
+const rateLimit = require("express-rate-limit");
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+});
+app.use(limiter);
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy' });
+});
+
 const rooms = new Map();
+
+// Room management functions
+const createRoom = (roomId) => {
+  rooms.set(roomId, {
+    playlist: [],
+    currentSong: null,
+    currentIndex: 0,
+    users: [],
+    playbackStatus: "paused",
+    currentTime: 0,
+  });
+  return rooms.get(roomId);
+};
+
+const cleanupEmptyRooms = () => {
+  for (const [roomId, room] of rooms) {
+    if (room.users.length === 0) {
+      rooms.delete(roomId);
+    }
+  }
+};
+
+// Set up periodic room cleanup
+setInterval(cleanupEmptyRooms, 60 * 60 * 1000); // Cleanup every hour
 
 io.on("connection", (socket) => {
   console.log(`New client connected: ${socket.id}`);
@@ -31,17 +101,15 @@ io.on("connection", (socket) => {
         throw new Error("Room ID and username are required");
       }
 
+      // Validate inputs
+      if (typeof roomId !== 'string' || typeof username !== 'string') {
+        throw new Error("Invalid input types");
+      }
+
       socket.join(roomId);
 
       if (!rooms.has(roomId)) {
-        rooms.set(roomId, {
-          playlist: [],
-          currentSong: null,
-          currentIndex: 0,
-          users: [],
-          playbackStatus: "paused",
-          currentTime: 0,
-        });
+        createRoom(roomId);
       }
 
       const room = rooms.get(roomId);
@@ -51,26 +119,22 @@ io.on("connection", (socket) => {
         room.users.push({ id: socket.id, username });
       }
 
-      // Send current room state + playlist to the joining user
-      if (callback)
-        callback({
-          success: true,
-          roomState: {
-            currentSong: room.currentSong,
-            playlist: room.playlist,
-            playbackStatus: room.playbackStatus,
-            currentTime: room.currentTime,
-            users: room.users.map((u) => u.username),
-          },
-        });
-
-      // Send playlist explicitly on join to this socket
-      io.to(socket.id).emit("playlistUpdated", room.playlist);
+      callback({
+        success: true,
+        roomState: {
+          currentSong: room.currentSong,
+          playlist: room.playlist,
+          playbackStatus: room.playbackStatus,
+          currentTime: room.currentTime,
+          users: room.users.map((u) => u.username),
+        },
+      });
 
       socket.to(roomId).emit("userJoined", username);
       io.to(roomId).emit("usersUpdated", room.users.map((u) => u.username));
     } catch (error) {
-      if (callback) callback({ success: false, error: error.message });
+      console.error("Join room error:", error);
+      callback({ success: false, error: error.message });
     }
   });
 
@@ -79,8 +143,13 @@ io.on("connection", (socket) => {
       const room = rooms.get(roomId);
       if (!room) throw new Error("Room not found");
 
+      // Validate song structure
+      if (!song?.id || !song?.name || !song?.downloadUrl) {
+        throw new Error("Invalid song format");
+      }
+
       // If song not already in playlist, add it
-      if (!room.playlist.find((s) => s.id === song.id)) {
+      if (!room.playlist.some((s) => s.id === song.id)) {
         room.playlist.push(song);
         io.to(roomId).emit("playlistUpdated", room.playlist);
       }
@@ -96,23 +165,33 @@ io.on("connection", (socket) => {
         playbackStatus: "playing",
       });
 
-      if (callback) callback({ success: true });
+      callback({ success: true });
     } catch (error) {
-      if (callback) callback({ success: false, error: error.message });
+      console.error("Play song error:", error);
+      callback({ success: false, error: error.message });
     }
   });
 
   socket.on("updatePlayback", ({ roomId, status, currentTime }) => {
-    const room = rooms.get(roomId);
-    if (!room) return;
+    try {
+      const room = rooms.get(roomId);
+      if (!room) return;
 
-    room.playbackStatus = status;
-    room.currentTime = currentTime;
+      // Validate status
+      if (!["playing", "paused"].includes(status)) {
+        throw new Error("Invalid playback status");
+      }
 
-    socket.to(roomId).emit("playbackUpdate", {
-      status,
-      currentTime,
-    });
+      room.playbackStatus = status;
+      room.currentTime = currentTime;
+
+      socket.to(roomId).emit("playbackUpdate", {
+        status,
+        currentTime,
+      });
+    } catch (error) {
+      console.error("Playback update error:", error);
+    }
   });
 
   socket.on("addSong", ({ roomId, song }, callback) => {
@@ -120,15 +199,20 @@ io.on("connection", (socket) => {
       const room = rooms.get(roomId);
       if (!room) throw new Error("Room not found");
 
-      // Avoid duplicates
-      if (!room.playlist.find((s) => s.id === song.id)) {
+      // Validate song structure
+      if (!song?.id || !song?.name || !song?.downloadUrl) {
+        throw new Error("Invalid song format");
+      }
+
+      if (!room.playlist.some((s) => s.id === song.id)) {
         room.playlist.push(song);
         io.to(roomId).emit("playlistUpdated", room.playlist);
       }
 
-      if (callback) callback({ success: true });
+      callback({ success: true });
     } catch (error) {
-      if (callback) callback({ success: false, error: error.message });
+      console.error("Add song error:", error);
+      callback({ success: false, error: error.message });
     }
   });
 
@@ -149,9 +233,10 @@ io.on("connection", (socket) => {
         playbackStatus: "playing",
       });
 
-      if (callback) callback({ success: true });
+      callback({ success: true });
     } catch (error) {
-      if (callback) callback({ success: false, error: error.message });
+      console.error("Next song error:", error);
+      callback({ success: false, error: error.message });
     }
   });
 
@@ -173,13 +258,15 @@ io.on("connection", (socket) => {
         playbackStatus: "playing",
       });
 
-      if (callback) callback({ success: true });
+      callback({ success: true });
     } catch (error) {
-      if (callback) callback({ success: false, error: error.message });
+      console.error("Previous song error:", error);
+      callback({ success: false, error: error.message });
     }
   });
 
   socket.on("disconnect", () => {
+    console.log(`Client disconnected: ${socket.id}`);
     for (const [roomId, room] of rooms) {
       const userIndex = room.users.findIndex((user) => user.id === socket.id);
       if (userIndex !== -1) {
@@ -198,7 +285,23 @@ io.on("connection", (socket) => {
   });
 });
 
-const PORT =5000;
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ error: 'Something went wrong!' });
+});
+
+const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled Rejection:', err);
 });
