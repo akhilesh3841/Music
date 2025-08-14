@@ -1,171 +1,158 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
-import { io } from 'socket.io-client';
-import Songs from './Songs';
+import { socket }   from '../socket';
+import Songs        from './Songs';
+import Chat         from './Chat';
+import { FaUser, FaUsers, FaDoorOpen } from 'react-icons/fa';
 
-const Home = () => {
+export default function Home() {
   const checkuser = useSelector(state => state.user.checkuser);
-  const [username, setUsername] = useState('');
-  const [roomId, setRoomId] = useState('');
-  const [users, setUsers] = useState([]);
-  const [error, setError] = useState('');
-  const [joined, setJoined] = useState(false);
-  const [socketConnected, setSocketConnected] = useState(false);
 
-  const socketRef = useRef(null);
+  const [username , setUsername ] = useState('');
+  const [roomId   , setRoomId   ] = useState('');
+  const [users    , setUsers    ] = useState([]);
+  const [error    , setError    ] = useState('');
+  const [joined   , setJoined   ] = useState(false);
+  const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    // Initialize socket with proper configuration
-    socketRef.current = io('https://music-sji4.onrender.com', {
-      withCredentials: true,
-      transports: ['websocket', 'polling'],
-      extraHeaders: {
-        "Origin": window.location.origin
-      }
-    });
-
-    socketRef.current.on('connect', () => {
-      console.log('Connected to server:', socketRef.current.id);
-      setSocketConnected(true);
-    });
-
-    socketRef.current.on('disconnect', () => {
-      setError('Disconnected from server');
+    socket.connect();
+    socket.on('connect',    () => setConnected(true));
+    socket.on('disconnect', () => {
+      setConnected(false);
       setJoined(false);
-      setSocketConnected(false);
+      setError('Disconnected from server');
     });
-
-    socketRef.current.on('connect_error', (err) => {
-      console.error('Connection error:', err);
-      setError('Failed to connect to server');
-      setSocketConnected(false);
-    });
-
-    socketRef.current.on('usersUpdated', (updatedUsers) => {
-      setUsers(updatedUsers);
-    });
-
-    return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-      }
-    };
+    socket.on('usersUpdated', arr => setUsers(arr));
+    return () => socket.disconnect();
   }, []);
 
   const joinRoom = () => {
-    if (!username || !roomId) {
-      setError('Username and Room ID are required');
-      return;
-    }
-
-    if (!socketConnected) {
-      setError('Not connected to server');
-      return;
-    }
+    if (!username || !roomId)
+      return setError('Username and Room ID required');
+    if (!connected)
+      return setError('Still connecting to server …');
 
     setError('');
-
-    socketRef.current.emit('joinRoom', { roomId, username }, (response) => {
-      if (response.success) {
-        setUsers(response.roomState.users);
+    socket.emit('joinRoom', { roomId, username }, res => {
+      if (res?.success) {
+        setUsers(res.roomState.users);
         setJoined(true);
-        setError('');
-      } else {
-        setError(response.error || 'Failed to join room');
-      }
+      } else setError(res?.error || 'Failed to join');
     });
   };
 
-  if (checkuser) {
+  const leaveRoom = () => {
+    setJoined(false);
+    setUsername('');
+    setRoomId('');
+    socket.emit('leaveRoom');
+  };
+
+
+  /* -------------------------------------------------- UI */
+  if (checkuser)
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 text-white text-xl font-semibold">
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 text-white text-2xl font-semibold">
         Welcome back!
       </div>
     );
-  }
 
-  if (joined) {
+  /* -------------- once joined ------------------- */
+  if (joined)
     return (
-      <div className="min-h-screen bg-gray-100 p-4 flex flex-col md:flex-row md:space-x-6">
-        <div className="md:w-1/3 bg-white rounded-lg shadow-md p-6 mb-6 md:mb-0 sticky top-4 h-fit">
-          <h2 className="text-2xl font-bold mb-4 text-gray-800">
-            Room: <span className="text-indigo-600">{roomId}</span>
-          </h2>
-          <p className="mb-4 text-gray-700">
-            <strong>Users:</strong>
-            <span className="block mt-2 text-indigo-700 font-medium">
-              {users.length > 0 ? users.join(', ') : 'No users yet'}
-            </span>
-          </p>
+      <div className="min-h-screen bg-gray-100 p-4 flex flex-col gap-6">
+        {/* room header */}
+        <div className="bg-white rounded-lg shadow-md p-4 flex flex-wrap gap-2 items-center justify-between">
+          <div className="flex items-center gap-2 text-xl font-bold">
+            <FaUsers /> Room&nbsp;<span className="text-indigo-600">{roomId}</span>
+          </div>
+
           <button
-            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 rounded transition"
-            onClick={() => {
-              setJoined(false);
-              setUsername('');
-              setRoomId('');
-              if (socketRef.current) {
-                socketRef.current.disconnect();
-              }
-            }}
+            onClick={leaveRoom}
+            className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white font-semibold px-4 py-1.5 rounded"
           >
-            Leave Room
+            <FaDoorOpen /> Leave
           </button>
+
+          <div className="w-full border-t my-2" />
+
+          {users.length
+            ? (
+              <ul className="flex flex-wrap gap-2">
+                {users.map(u => (
+                  <li
+                    key={u.id}
+                    className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded text-sm"
+                  >
+                    {u.username}
+                  </li>
+                ))}
+              </ul>
+            )
+            : <p className="text-gray-400 italic">No users yet…</p>}
         </div>
 
-        <div className="md:w-2/3 bg-white rounded-lg shadow-md p-6 overflow-auto">
-          <Songs socket={socketRef.current} roomId={roomId} username={username} />
+        {/* grid: chat + songs */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Chat  socket={socket} roomId={roomId} username={username} />
+          <Songs socket={socket} roomId={roomId} users={users} />
         </div>
       </div>
     );
-  }
 
+  /* -------------- join form --------------------- */
   return (
     <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-600 px-4">
-      <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-8">
-        <h2 className="text-3xl font-bold mb-6 text-center text-indigo-700">Join a Music Room</h2>
+      <div className="bg-white/90 backdrop-blur-md rounded-3xl shadow-2xl max-w-md w-full p-8 border border-white/20">
+        <h2 className="text-4xl font-extrabold mb-6 text-center bg-gradient-to-r from-pink-500 to-yellow-400 bg-clip-text text-transparent">
+          Join a Music Room
+        </h2>
+
         {error && (
-          <p className="mb-4 text-center text-red-600 font-semibold bg-red-100 p-2 rounded">{error}</p>
+          <p className="mb-4 text-center text-red-700 font-semibold bg-red-100 border border-red-300 p-2 rounded-lg">
+            {error}
+          </p>
         )}
+
+        {/* username */}
         <div className="mb-4">
-          <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
-            Username
+          <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+            <FaUser className="text-pink-500" /> Username
           </label>
           <input
-            id="username"
-            type="text"
-            placeholder="Enter your username"
             value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            className="w-full px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            onChange={e => setUsername(e.target.value)}
+            placeholder="Enter your username"
+            className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-pink-400 shadow-sm"
           />
         </div>
+
+        {/* roomId */}
         <div className="mb-6">
-          <label htmlFor="roomId" className="block text-sm font-medium text-gray-700 mb-1">
-            Room ID
+          <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+            <FaUsers className="text-indigo-500" /> Room ID
           </label>
           <input
-            id="roomId"
-            type="text"
-            placeholder="Enter Room ID"
             value={roomId}
-            onChange={(e) => setRoomId(e.target.value)}
-            className="w-full px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            onChange={e => setRoomId(e.target.value)}
+            placeholder="Enter Room ID"
+            className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-400 shadow-sm"
           />
         </div>
+
         <button
           onClick={joinRoom}
-          disabled={!username || !roomId || !socketConnected}
-          className={`w-full py-3 font-semibold rounded transition ${
-            username && roomId && socketConnected
-              ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
-              : 'bg-indigo-300 text-indigo-100 cursor-not-allowed'
+          disabled={!username || !roomId || !connected}
+          className={`w-full py-3 font-bold rounded-xl text-lg transition-all duration-300 ${
+            username && roomId && connected
+              ? 'bg-gradient-to-r from-pink-500 to-yellow-400 text-white hover:scale-105'
+              : 'bg-gray-300 text-gray-100 cursor-not-allowed'
           }`}
         >
-          {socketConnected ? 'Join Room' : 'Connecting...'}
+          {connected ? 'Join Room' : 'Connecting…'}
         </button>
       </div>
     </div>
   );
-};
-
-export default Home;
+}

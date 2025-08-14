@@ -1,28 +1,10 @@
 import React from 'react';
-import Room from './Room';
-import Chat from './components/Chat';
-import Search from './components/Search';
-import Home from './components/Home';
-import { useSelector } from 'react-redux';
+import Home  from './components/Home';
 
-const App = () => {
-  const checkuser = useSelector(state => state.user.checkuser);
-
-  return (
-    <div>
-      {
-        checkuser ? (
-          <div>
-            <Room />
-          </div>
-        ) : (
-         <div>
-            <Home />
-          </div>
-        )
-      }
-    </div>
-  );
-};
+const App = () => (
+  <div className="font-sans min-h-screen">
+    <Home />
+  </div>
+);
 
 export default App;
