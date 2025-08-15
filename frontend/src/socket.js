@@ -1,11 +1,14 @@
 import { io } from "socket.io-client";
 
-// Vite uses 'import.meta.env'. For Create React App, use 'process.env.REACT_APP_SOCKET_URL'
 const URL =
-  "http://localhost:5000" ||
-  "https://music-sji4.onrender.com"; // fallback to production URL
+  import.meta.env.PROD
+    ? "https://music-sji4.onrender.com"
+    : "http://localhost:5000";
 
 export const socket = io(URL, {
   autoConnect: false,
-  withCredentials: true
+  withCredentials: true,
+  transports: ["polling", "websocket"],
 });
+
+socket.on('connect_error', err => console.warn('connect_error →', err?.message));
