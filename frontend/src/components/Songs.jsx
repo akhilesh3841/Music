@@ -27,7 +27,7 @@ const Songs = ({ socket, roomId, users }) => {
     try {
       setIsLoading(true);
       const { data } = await axios.get(
-        `https://jiosavan-api-with-playlist.vercel.app/api/search/songs?query=${q}&page=1&limit=500`
+        `https://jioapi-9pdbymle6-akhileshs-projects-a76769c2.vercel.app/api/search/songs?query=...`
       );
       setSongs(data.data?.results || []);
     } finally {
